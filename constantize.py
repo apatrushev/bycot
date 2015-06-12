@@ -35,13 +35,18 @@ def rebuild_code(func_code, mapping):
         elif opcode >= dis.HAVE_ARGUMENT:
             arg = [code.next() for _ in xrange(2)]
 
+        #interesting opcode
         if opcode == dis.opmap['LOAD_GLOBAL']:
+            #arg is an index in co_names list
             name_pos = arg[0] + arg[1]*256
             name = names[name_pos]
+            #map only requested names
             if name in mapping:
-                #if we not created const for name yet
+                #create const for name if its not created yet
                 if name not in names_consts:
+                    #put the value from global scope to const
                     consts.append(mapping[name])
+                    #...and save index for future use
                     names_consts[name] = len(consts) - 1
                 #change opcode and arg to const
                 opcode = dis.opmap['LOAD_CONST']
@@ -51,11 +56,13 @@ def rebuild_code(func_code, mapping):
         codestring.append(opcode)
         if arg is not None:
             codestring.extend(arg)
-    #map(names.remove, names_consts.keys()) - names can be used somewhere else in the code
-    codestring = ''.join(chr(b) for b in codestring)
+    #construct new code string
+    codestring = ''.join(map(chr, codestring))
+    #construct function object
     new_code = type(func_code)(co_argcount, co_nlocals, co_stacksize,
-        co_flags, codestring, tuple(consts), co_names, co_varnames, co_filename,
-        co_name, co_firstlineno, co_lnotab, co_freevars, co_cellvars)
+        co_flags, codestring, tuple(consts), co_names, co_varnames,
+        co_filename, co_name, co_firstlineno, co_lnotab, co_freevars,
+        co_cellvars)
 
     return new_code
 
@@ -82,26 +89,39 @@ if __name__ == '__main__':
             if isinstance(c, (tuple, list)):
                 res.append(len(c))
 
-    @constantize(*(len, isinstance, list, tuple))
-    def ctest(b):
-        res = []
-        for c in b:
-            if isinstance(c, (tuple, list)):
-                res.append(len(c))
+    ctest = constantize(*(len, isinstance, list, tuple))(test)
 
-    import timeit
-    import os
+    # you should use it like written below
+    # I use another style here to be sure that functions are the same
+
+    # @constantize(*(len, isinstance, list, tuple))
+    # def ctest(b):
+    #     res = []
+    #     for c in b:
+    #         if isinstance(c, (tuple, list)):
+    #             res.append(len(c))
+
+
+    #display bytecode of functions
+    print "==== original code ===="
     dis.dis(test)
+    print "==== patched code  ===="
     dis.dis(ctest)
 
+    #sanity check before timeit
     assert test != ctest
     test([[]])
     ctest([[]])
-    setup = os.linesep.join((
-        'from __main__ import test, ctest',
-        'param = sum(([(),None,[]] for _ in xrange(100)), [])'))
+
+    import timeit
+    import os
+    timeit_setup = """from __main__ import test, ctest
+param = sum(([(),None,[]] for _ in xrange(100)), [])"""
     avg = lambda x: sum(x)/len(x)
-    run = lambda x: timeit.timeit(x, setup, number=10000)
-    original = avg(sorted(run('test(param)') for x in xrange(10))[1:-1])
-    patched = avg(sorted(run('ctest(param)') for x in xrange(10))[1:-1])
+    single_run = lambda x: timeit.timeit(x, timeit_setup, number=10000)
+    batch_run = lambda x, y: [single_run(x) for _ in xrange(y)]
+    #remove best/worst time from batch_run and get avg
+    stat_run = lambda x, y: avg(sorted(batch_run(x, y))[1:-1])
+    original = stat_run('test(param)', 10)
+    patched = stat_run('ctest(param)', 10)
     print '%s/%s=%s' % (patched, original, patched/original)
